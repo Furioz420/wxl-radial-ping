@@ -1,5 +1,9 @@
 # WXL Radial Ping
 
+MASSIVE THANKS TO ITHORGRIM FOR THE CLIENT RELATED FUNCTIONS IN WXL
+MASSIVE THANKS TO DUSKHAVEN AND THE AFFILIATED DEVS LIKE TESTER FOR THE BASE ADDON FOR RADIAL PING
+I just did some refining and adjustments to it and reworked it to work with wxl & ac.
+
 Native WarcraftXL port of the former `RadialPing` addon.
 
 - Client settings are archived custom CVars and appear under Interface > WXL > Radial Ping.
