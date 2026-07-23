@@ -16,10 +16,6 @@ Native WarcraftXL port of the former `RadialPing` addon.
   sender's party/raid on the same map.
 - Client files required by an MPQ/open patch are under `assets/` with their exact virtual paths.
 
-Install `wxl_radial_ping.cpp`, use the refactored `wxl_quest_marker.cpp`, and install the WXL opcode
-registry/integration files. Register the two feature loaders:
-
-1. `AddSC_wxl_quest_marker()`
-2. `AddSC_wxl_radial_ping()`
-
-Do not run the old `Interface/AddOns/RadialPing` addon alongside this module.
+Install `wxl_radial_ping.cpp`, and install the WXL opcode
+registry/integration files. Register the feature loader:
+`AddSC_wxl_radial_ping()`
