@@ -1,0 +1,12 @@
+## Interface: 30300
+## Title: WarcraftXL: Radial Ping
+## Notes: Radial ping wheel for parties and raids
+## Version: 1.0
+## SavedVariables: RadialPingDB
+
+Atlas.lua
+Core.lua
+World.lua
+Wheel.lua
+Init.lua
+Settings.lua

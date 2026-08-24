@@ -1,5 +1,4 @@
-WXL_RadialPing = WXL_RadialPing or {}
-local addon = WXL_RadialPing
+local _, addon = ...
 
 addon.TEXTURE_PING        = "Interface\\WarcraftXL\\RadialPing\\Textures\\uipingsystem2x.blp"
 addon.TEXTURE_WHEEL       = "Interface\\WarcraftXL\\RadialPing\\Textures\\uiradialwheel.blp"

@@ -1,4 +1,4 @@
-local addon = WXL_RadialPing
+local _, addon = ...
 
 local WHEEL_BG_KEY    = "Radial_Wheel_BG"
 local WHEEL_FRAME_KEY = "Radial_Wheel_Frame_Count_4"
@@ -9,8 +9,8 @@ local WHEEL_CLOSE_HL_KEY = "Radial_Wheel_Select_Close"
 -- cursor there; addon texture paths (especially with a .blp suffix) are not accepted
 -- reliably by the 3.3.5 cursor API and were being retried every frame.
 local CURSORPIN          = "Interface\\Cursor\\PingUiPin"
-local TWEEN_IN_DURATION  = 0.25
-local TWEEN_OUT_DURATION = 0.12
+local TWEEN_IN_DURATION  = 0.20
+local TWEEN_OUT_DURATION = 0.13
 
 local WHEEL_SIZE = addon.atlas[WHEEL_BG_KEY].width
 local WHEEL_HALF = WHEEL_SIZE / 2
@@ -39,14 +39,23 @@ end
 local wheel
 local wheelPin
 
-local function unitTokenMatchesGuid(token, guidLow, guidHigh)
+function addon:IsWheelOpen()
+    return wheel and wheel:IsShown() and wheel.tweenState ~= "out"
+end
+
+local function unitGuidParts(token)
     if not UnitGUID then return false end
     local guid = UnitGUID(token)
     local hex = guid and guid:match("^0[xX](%x+)$")
-    if not hex then return false end
+    if not hex then return nil, nil end
     if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
     local high = tonumber(hex:sub(1, 8), 16)
     local low = tonumber(hex:sub(9, 16), 16)
+    return low, high
+end
+
+local function unitTokenMatchesGuid(token, guidLow, guidHigh)
+    local low, high = unitGuidParts(token)
     return low == guidLow and high == guidHigh
 end
 
@@ -60,14 +69,54 @@ local function findAttachedUnitName(guidLow, guidHigh)
     return "creature"
 end
 
+function addon:ResolveCursorAnchor()
+    local worldX, worldY, worldZ, guidLow, guidHigh =
+        self:GetMouseWorldPosition()
+
+    -- The Wrath world picker can pass through friendly player models and
+    -- report the floor behind them. The native mouseover token is exact, so
+    -- prefer its GUID and resolved world position when one is present.
+    local mouseoverLow, mouseoverHigh = unitGuidParts("mouseover")
+    if mouseoverLow and mouseoverHigh and
+       (mouseoverLow ~= 0 or mouseoverHigh ~= 0) then
+        local mouseoverX, mouseoverY, mouseoverZ =
+            self:GetUnitWorldPosition(mouseoverLow, mouseoverHigh)
+        if mouseoverX then
+            return mouseoverX, mouseoverY, mouseoverZ,
+                mouseoverLow, mouseoverHigh,
+                UnitName("mouseover") or
+                    findAttachedUnitName(mouseoverLow, mouseoverHigh)
+        end
+    end
+
+    if guidLow and guidHigh and (guidLow ~= 0 or guidHigh ~= 0) then
+        local unitX, unitY, unitZ = self:GetUnitWorldPosition(guidLow, guidHigh)
+        if unitX then
+            return unitX, unitY, unitZ, guidLow, guidHigh,
+                findAttachedUnitName(guidLow, guidHigh)
+        end
+    end
+
+    return worldX, worldY, worldZ
+end
+
+function addon:PingAtCursor(pingType)
+    if not self.PING_TYPES[pingType] then return end
+    if self:IsWheelOpen() then self:CloseWheel(false) end
+
+    local x, y, z, guidLow, guidHigh, unitName = self:ResolveCursorAnchor()
+    if x == nil or y == nil or z == nil then return end
+    self:SendPing(pingType, x, y, z, guidLow, guidHigh, unitName)
+end
+
 local function slotFromCursorDelta(dx, dy)
     if dx * dx + dy * dy < DEADZONE_SQ then return nil end
     local angle = math.atan2(dy, dx)
     local clockwiseFromNorth = math.pi / 2 - angle
     local twoPi = math.pi * 2
-    -- Slots are centered on the cardinal directions. Without the half-section
-    -- offset their boundaries sit on the cardinals, so the previous wedge stays
-    -- highlighted through an entire quadrant before changing.
+    -- Center each selection sector on its displayed icon. The old calculation
+    -- started a sector at North, so moving a fraction left of the top icon
+    -- jumped all the way to the West slot and made the wheel feel reluctant.
     local normalized = ((clockwiseFromNorth + addon.WHEEL_SECTION_RADIANS / 2) % twoPi + twoPi) % twoPi
     local count = #addon.WHEEL_SLOTS
     return math.floor(normalized / addon.WHEEL_SECTION_RADIANS) % count + 1
@@ -108,11 +157,9 @@ local function onUpdate(frame)
     if frame.tweenState == "out" then
         local t = math.min((now - frame.tweenStartTime) / TWEEN_OUT_DURATION, 1)
         local ease = t * t  -- ease-in quad
-        frame:SetScale(1 - ease * 0.5)
         frame:SetAlpha(1 - ease)
         if t >= 1 then
             frame:SetScript("OnUpdate", nil)
-            frame:SetScale(1)
             frame:SetAlpha(1)
             frame:Hide()
             frame.tweenState = nil
@@ -120,16 +167,13 @@ local function onUpdate(frame)
         return
     end
 
-    SetCursor(CURSORPIN)
-
-    -- Open tween: grow from center + fade in
+    -- Retail fades the wheel chrome in but keeps the selection geometry at its
+    -- final scale, so cursor motion is represented immediately.
     if frame.tweenState == "in" then
         local t = math.min((now - frame.tweenStartTime) / TWEEN_IN_DURATION, 1)
         local ease = 1 - (1 - t) * (1 - t)  -- ease-out quad
-        frame:SetScale(0.05 + ease * 0.95)
         frame:SetAlpha(ease)
         if t >= 1 then
-            frame:SetScale(1)
             frame:SetAlpha(1)
             frame.tweenState = nil
         end
@@ -234,6 +278,7 @@ local function createWheel()
     frame.pointer:Hide()
 
     frame.icons = {}
+    frame.labels = {}
     for i, slot in ipairs(addon.WHEEL_SLOTS) do
         local cfg = addon.PING_TYPES[slot.pingType]
         local off = SLOT_ICON_OFFSETS[i]
@@ -242,6 +287,25 @@ local function createWheel()
         addon:ApplyPingRegion(icon, cfg.iconNormal)
         icon:SetAlpha(0.8)
         frame.icons[i] = icon
+
+        -- Retail treats the label as part of each wedge. Apart from matching the
+        -- visual layout, it makes fast mouse sweeps much easier to read than an
+        -- icon-only wheel.
+        local label = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetText(cfg.label)
+        label:SetTextColor(1, 1, 1)
+        label:SetShadowColor(0, 0, 0, 0.9)
+        label:SetShadowOffset(1, -1)
+        if slot.angle == 90 then
+            label:SetPoint("BOTTOM", icon, "TOP", 0, 8)
+        elseif slot.angle == 180 then
+            label:SetPoint("RIGHT", icon, "LEFT", -4, 0)
+        elseif slot.angle == 270 then
+            label:SetPoint("TOP", icon, "BOTTOM", 0, -8)
+        else
+            label:SetPoint("LEFT", icon, "RIGHT", 4, 0)
+        end
+        frame.labels[i] = label
     end
 
     frame:Hide()
@@ -259,35 +323,18 @@ function addon:OpenWheel(worldX, worldY, worldZ)
     if worldX then
         wheel.anchorWorldX, wheel.anchorWorldY, wheel.anchorWorldZ = worldX, worldY, worldZ
     else
-        local guidLow, guidHigh
-        wheel.anchorWorldX, wheel.anchorWorldY, wheel.anchorWorldZ, guidLow, guidHigh =
-            GetMouseWorldPosition()
-        if GetUnitPosition and guidLow and guidHigh and (guidLow ~= 0 or guidHigh ~= 0) then
-            local unitX = GetUnitPosition(guidLow, guidHigh)
-            if unitX then
-                wheel.anchorGuidLow = guidLow
-                wheel.anchorGuidHigh = guidHigh
-                wheel.anchorUnitName = findAttachedUnitName(guidLow, guidHigh)
-            end
-        end
+        wheel.anchorWorldX, wheel.anchorWorldY, wheel.anchorWorldZ,
+            wheel.anchorGuidLow, wheel.anchorGuidHigh, wheel.anchorUnitName =
+            self:ResolveCursorAnchor()
     end
 
     local x, y = self:GetCursorUIPosition()
 
-    -- Calibrate the small coordinate-origin difference by round-tripping the world
-    -- point that was just picked under this exact cursor position. This is an origin
-    -- correction only; it does not distort world-space motion or camera tracking.
-    if wheel.anchorWorldX and wheel.anchorWorldY and wheel.anchorWorldZ then
-        local projectedX, projectedY = ConvertCoordsToScreenSpace(
-            wheel.anchorWorldX, wheel.anchorWorldY, wheel.anchorWorldZ)
-        if projectedX and projectedY then
-            local projectionRoot = WorldFrame or UIParent
-            local rootLeft = projectionRoot:GetLeft() or 0
-            local rootBottom = projectionRoot:GetBottom() or 0
-            addon.WORLD_PROJECTION_OFFSET_X = x - (rootLeft + projectedX)
-            addon.WORLD_PROJECTION_OFFSET_Y = y - (rootBottom + projectedY)
-        end
-    end
+    -- Native projection and marker anchors share WorldFrame coordinates. Do not
+    -- derive a global correction from the clicked model surface: that correction
+    -- becomes invalid when the camera moves or the pin follows a unit.
+    addon.WORLD_PROJECTION_OFFSET_X = 0
+    addon.WORLD_PROJECTION_OFFSET_Y = 0
 
     -- Save unclamped cursor origin — this is the reference for delta/selection.
     -- anchorX/Y is clamped (for wheel placement); using it for delta gives wrong
@@ -300,12 +347,13 @@ function addon:OpenWheel(worldX, worldY, worldZ)
 
     wheelPin:ClearAllPoints()
     wheelPin:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y)
-    wheel:SetScale(0.05)
+    wheel:SetScale(1)
     wheel:SetAlpha(0)
     wheel.tweenState = "in"
     wheel.tweenStartTime = GetTime()
     wheel:Show()
     wheel:SetScript("OnUpdate", onUpdate)
+    SetCursor(CURSORPIN)
 
     setSelection(wheel, nil)
 end

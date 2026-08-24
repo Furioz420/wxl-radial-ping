@@ -1,4 +1,4 @@
-local addon = WXL_RadialPing
+local _, addon = ...
 
 local activePings = {}
 local lastSendTime = 0
@@ -14,6 +14,7 @@ local STROKE_ROTATION_SPEED = -math.pi * 0.6  -- radians/sec, anti-clockwise
 local RISE_DURATION         = 0.33             -- seconds for bubble to travel from ground to top
 local STROKE_SCALE          = 1.50             -- >1 makes the ring larger than the raw BLP size
 local SCREEN_EDGE_MARGIN    = 8
+local CLAMPED_SIZE          = addon.atlas.Ping_OVMarker_Pointer_OnMyWay.width
 
 -- ── Minimap blip ────────────────────────────────────────────────────────────
 -- Approximate visible radius (yards) at each Minimap zoom level (outdoor zones).
@@ -77,13 +78,49 @@ local function applyStrokeRotation(texture, radians)
     texture:SetRotation(radians)
 end
 
+-- Texture:SetRotation() rebuilds coordinates against the complete texture.
+-- That is correct for the standalone stroke BLPs, but clamped pointers are
+-- regions inside UIPingSystem2x: rotating them that way exposes the full atlas.
+-- Rotate the four corners inside the selected atlas rectangle instead.
+local function applyAtlasRotation(texture, region, radians)
+    local centerX = (region.left + region.right) * 0.5
+    local centerY = (region.top + region.bottom) * 0.5
+    local cosine = math.cos(radians)
+    local sine = math.sin(radians)
+
+    local function rotate(x, y)
+        local dx = x - centerX
+        local dy = y - centerY
+        return centerX + dx * cosine - dy * sine,
+               centerY + dx * sine + dy * cosine
+    end
+
+    local ulX, ulY = rotate(region.left, region.top)
+    local llX, llY = rotate(region.left, region.bottom)
+    local urX, urY = rotate(region.right, region.top)
+    local lrX, lrY = rotate(region.right, region.bottom)
+    texture:SetTexCoord(ulX, ulY, llX, llY, urX, urY, lrX, lrY)
+end
+
 local function applyStyle(frame, pingType)
     local cfg = addon.PING_TYPES[pingType]
     frame.pingType = pingType
     frame.lastFlipbookFrame = nil
 
-    addon:ApplyPingRegion(frame.bg, cfg.markerBg)
-    addon:ApplyPingRegion(frame.pin, cfg.markerPin, addon.PIN_TOP_CROP)
+    if frame.isWorldPoint then
+        frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+        frame.bg:ClearAllPoints()
+        frame.bg:SetPoint("TOP", frame, "TOP", 0, 0)
+        addon:ApplyPingRegion(frame.bg, cfg.groundBg)
+        addon:ApplyPingRegion(frame.pin, cfg.groundPin, addon.PIN_TOP_CROP)
+        frame.pin:Show()
+    else
+        frame:SetSize(FRAME_WIDTH, BG_HEIGHT)
+        frame.bg:ClearAllPoints()
+        frame.bg:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+        addon:ApplyPingRegion(frame.bg, cfg.unitBg)
+        frame.pin:Hide()
+    end
 
     frame.flipbook:ClearAllPoints()
     frame.flipbook:SetPoint("CENTER", frame.bg, "CENTER", cfg.flipbookOffsetX, cfg.flipbookOffsetY)
@@ -95,9 +132,14 @@ local function applyStyle(frame, pingType)
     local strokeAtlas = addon.atlas["Ping_GroundMarker_Stroke_" .. pingType]
                      or addon.atlas["Ping_GroundMarker_Stroke_Warning"]
     frame.stroke:SetSize(strokeAtlas.width * STROKE_SCALE, strokeAtlas.height * STROKE_SCALE)
+    frame.stroke:ClearAllPoints()
     frame.stroke:SetPoint("CENTER", frame.bg, "CENTER", 0, 4)
     frame.strokeAngle = 0
     applyStrokeRotation(frame.stroke, 0)
+
+    addon:ApplyPingRegion(frame.clampedBg, "Ping_OVMarker_Pointer_BG")
+    frame.clampedPointerRegion = addon.atlas["Ping_OVMarker_Pointer_" .. pingType]
+    addon:ApplyPingRegion(frame.clampedPointer, "Ping_OVMarker_Pointer_" .. pingType)
 
     -- Minimap pin icon
     local r = addon.atlas["Ping_MapPin_" .. pingType]
@@ -108,15 +150,63 @@ local function applyStyle(frame, pingType)
     end
 end
 
+local function setClampedState(frame, clamped, rawX, rawY, projectionRoot)
+    if clamped then
+        frame.bg:Hide()
+        frame.pin:Hide()
+        frame.flipbook:Hide()
+        frame.stroke:Hide()
+        frame.clampedBg:Show()
+        frame.clampedPointer:Show()
+
+        local centerX = projectionRoot:GetWidth() / 2
+        local centerY = projectionRoot:GetHeight() / 2
+        local dx = rawX - centerX
+        local dy = rawY - centerY
+        if dx ~= 0 or dy ~= 0 then
+            -- The retail clamped marker points back toward the actual world pin.
+            applyAtlasRotation(
+                frame.clampedPointer, frame.clampedPointerRegion,
+                math.atan2(dy, dx) - math.pi / 2)
+        end
+    else
+        frame.clampedBg:Hide()
+        frame.clampedPointer:Hide()
+        frame.bg:Show()
+        if frame.isWorldPoint then
+            frame.pin:Show()
+            if frame.riseComplete then
+                frame.flipbook:Show()
+                frame.stroke:Show()
+            else
+                frame.flipbook:Hide()
+                frame.stroke:Hide()
+            end
+        else
+            frame.pin:Hide()
+            frame.flipbook:Show()
+            if frame.riseComplete then
+                frame.stroke:Show()
+            else
+                frame.stroke:Hide()
+            end
+        end
+    end
+    frame.isClamped = clamped
+end
+
 local function updatePosition(frame)
-    if frame.unitGuidLow and frame.unitGuidHigh and GetUnitPosition then
-        local unitX, unitY, unitZ = GetUnitPosition(frame.unitGuidLow, frame.unitGuidHigh)
+    if frame.unitGuidLow and frame.unitGuidHigh then
+        local unitX, unitY, unitZ = addon:GetUnitWorldPosition(
+            frame.unitGuidLow, frame.unitGuidHigh)
         if unitX and unitY and unitZ then
-            frame.posX, frame.posY, frame.posZ = unitX, unitY, unitZ
+            frame.posX = unitX
+            frame.posY = unitY
+            frame.posZ = unitZ
         end
     end
 
-    local rawX, rawY, _, visible = ConvertCoordsToScreenSpace(
+    local rawX, rawY, _, visible = addon:ConvertWorldToScreen(
         frame.posX, frame.posY, frame.posZ)
     local projectionRoot = WorldFrame or UIParent
     if rawX == nil or rawY == nil then
@@ -131,39 +221,56 @@ local function updatePosition(frame)
     frame.lastRawX, frame.lastRawY = rawX, rawY
     if not frame:IsShown() then frame:Show() end
     frame:ClearAllPoints()
-    -- ConvertCoordsToScreenSpace is relative to CGWorldFrame. WorldFrame can have a
-    -- non-zero inset inside UIParent, so using UIParent as the anchor root introduces
-    -- a constant diagonal offset even when the projection itself is correct.
-    local offsetX = addon.WORLD_PROJECTION_OFFSET_X or 0
-    local offsetY = addon.WORLD_PROJECTION_OFFSET_Y or 0
-    local screenX = rawX + offsetX
-    local screenY = rawY + offsetY
+    local screenX = rawX
+    local screenY = rawY
 
     -- Keep clipped pings on the nearest WorldFrame edge so group/raid pings remain
     -- visible even when their world point is outside the current camera view.
-    local minX = FRAME_WIDTH / 2 + SCREEN_EDGE_MARGIN
-    local maxX = math.max(minX, projectionRoot:GetWidth() - FRAME_WIDTH / 2 - SCREEN_EDGE_MARGIN)
-    local minY = SCREEN_EDGE_MARGIN
-    local maxY = math.max(minY, projectionRoot:GetHeight() - FRAME_HEIGHT - SCREEN_EDGE_MARGIN)
-    if visible == 0 or screenX < minX or screenX > maxX or screenY < minY or screenY > maxY then
+    local halfClamp = CLAMPED_SIZE / 2
+    local minX = halfClamp + SCREEN_EDGE_MARGIN
+    local maxX = math.max(minX, projectionRoot:GetWidth() - halfClamp - SCREEN_EDGE_MARGIN)
+    local minY = halfClamp + SCREEN_EDGE_MARGIN
+    local maxY = math.max(minY, projectionRoot:GetHeight() - halfClamp - SCREEN_EDGE_MARGIN)
+    local clamped = visible == 0 or screenX < minX or screenX > maxX or screenY < minY or screenY > maxY
+    if clamped then
         screenX = math.min(math.max(screenX, minX), maxX)
         screenY = math.min(math.max(screenY, minY), maxY)
     end
 
-    frame:SetPoint("BOTTOM", projectionRoot, "BOTTOMLEFT", screenX, screenY)
+    setClampedState(frame, clamped, rawX, rawY, projectionRoot)
+    if clamped then
+        frame:SetPoint("CENTER", projectionRoot, "BOTTOMLEFT", screenX, screenY)
+    else
+        frame:SetPoint("BOTTOM", projectionRoot, "BOTTOMLEFT", screenX, screenY)
+    end
     return true
 end
 
 -- Returns true once bubble has reached its final position.
 local function updateRise(frame)
     local elapsed = GetTime() - frame.spawnedAt
+    if not frame.isWorldPoint then
+        local duration = 0.23
+        local t = math.min(elapsed / duration, 1)
+        frame.bg:ClearAllPoints()
+        frame.bg:SetPoint("BOTTOM", frame, "BOTTOM", 0, (1 - easeOut(t)) * 40)
+        if t >= 1 and not frame.riseComplete then
+            frame.riseComplete = true
+            frame.settleTime = GetTime()
+            frame.bg:ClearAllPoints()
+            frame.bg:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+            frame.stroke:Show()
+        end
+        return t >= 1
+    end
+
     if elapsed >= RISE_DURATION then
         if not frame.riseComplete then
             frame.riseComplete = true
             frame.settleTime = GetTime()
             frame.bg:ClearAllPoints()
             frame.bg:SetPoint("TOP", frame, "TOP", 0, 0)
-            addon:ApplyPingRegion(frame.pin, addon.PING_TYPES[frame.pingType].markerPin, addon.PIN_TOP_CROP)
+            addon:ApplyPingRegion(frame.pin, addon.PING_TYPES[frame.pingType].groundPin, addon.PIN_TOP_CROP)
             frame.flipbook:Show()
             frame.stroke:Show()
         end
@@ -175,7 +282,7 @@ local function updateRise(frame)
     frame.bg:SetPoint("TOP", frame, "TOP", 0, -(1 - t) * STEM_BELOW)
     -- Stem grows from the attachment point downward as bubble rises
     local stemT = math.max(t, 0.001)
-    local r = addon.atlas[addon.PING_TYPES[frame.pingType].markerPin]
+    local r = addon.atlas[addon.PING_TYPES[frame.pingType].groundPin]
     local topCoord = r.top + (r.bottom - r.top) * (addon.PIN_TOP_CROP / r.height)
     frame.pin:SetTexCoord(r.left, r.right, topCoord, topCoord + (r.bottom - topCoord) * stemT)
     frame.pin:SetSize(r.width, math.max(STEM_VISIBLE * stemT, 1))
@@ -207,6 +314,15 @@ local function onUpdate(frame)
             frame.strokeAngle = frame.strokeAngle + STROKE_ROTATION_SPEED * frame.lastElapsed
             applyStrokeRotation(frame.stroke, frame.strokeAngle)
         end
+        -- Rise/flipbook updates intentionally keep progressing while the world
+        -- anchor is off screen, but the retail clamped pointer must remain the
+        -- only visible representation until the anchor re-enters the viewport.
+        if frame.isClamped then
+            frame.bg:Hide()
+            frame.pin:Hide()
+            frame.flipbook:Hide()
+            frame.stroke:Hide()
+        end
         if remaining < addon.PING_FADE_OUT_SECONDS then
             frame:SetAlpha(remaining / addon.PING_FADE_OUT_SECONDS)
         else
@@ -219,10 +335,17 @@ local function onUpdate(frame)
 end
 
 local function createFrame()
-    local frame = CreateFrame("Frame", nil, UIParent)
+    -- Native world projection returns coordinates in WorldFrame space. Keep the
+    -- visual receiver in that same hierarchy so UIParent scaling, widescreen
+    -- offsets, and camera viewport changes cannot introduce a second transform.
+    -- This is the same anchoring contract used by the QuestMarker distance label.
+    local projectionRoot = WorldFrame or UIParent
+    local frame = CreateFrame("Frame", nil, projectionRoot)
     frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
-    frame:SetFrameStrata("FULLSCREEN")
-    frame:SetFrameLevel(10)
+    -- World pins should be occluded by normal interface panels instead of
+    -- floating over bags, the PVE frame, or other full-screen UI.
+    frame:SetFrameStrata("BACKGROUND")
+    frame:SetFrameLevel(1)
     frame:EnableMouse(false)
 
     frame.bg = frame:CreateTexture(nil, "ARTWORK", nil, 1)
@@ -240,6 +363,14 @@ local function createFrame()
     frame.stroke:SetBlendMode("ADD")
     frame.stroke._strokeKey = "Ping_GroundMarker_Stroke_OnMyWay"  -- default, overwritten in applyStyle
 
+    frame.clampedBg = frame:CreateTexture(nil, "ARTWORK", nil, 4)
+    frame.clampedBg:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.clampedBg:Hide()
+
+    frame.clampedPointer = frame:CreateTexture(nil, "OVERLAY", nil, 5)
+    frame.clampedPointer:SetPoint("CENTER", frame.clampedBg, "CENTER", 0, 0)
+    frame.clampedPointer:Hide()
+
     frame.mmBlip = createMinimapBlip()
 
     frame:Hide()
@@ -255,17 +386,6 @@ function addon:ApplyPing(sender, pingType, x, y, z, guidLow, guidHigh, unitName)
         activePings[sender] = frame
     end
 
-    applyStyle(frame, pingType)
-    -- Reset to spawn state: bubble at ground, stem collapsed, animated parts hidden
-    frame.bg:ClearAllPoints()
-    frame.bg:SetPoint("TOP", frame, "TOP", 0, -STEM_BELOW)
-    frame.pin:SetSize(frame.pin:GetWidth(), 1)
-    frame.flipbook:Hide()
-    frame.stroke:Hide()
-    frame.riseComplete = false
-    frame.settleTime   = nil
-    frame.posX, frame.posY, frame.posZ = x, y, z
-    frame.lastRawX, frame.lastRawY = nil, nil
     frame.unitGuidLow = tonumber(guidLow)
     frame.unitGuidHigh = tonumber(guidHigh)
     frame.unitName = unitName
@@ -273,6 +393,28 @@ function addon:ApplyPing(sender, pingType, x, y, z, guidLow, guidHigh, unitName)
        (frame.unitGuidLow == 0 and frame.unitGuidHigh == 0) then
         frame.unitGuidLow, frame.unitGuidHigh, frame.unitName = nil, nil, nil
     end
+    frame.isWorldPoint = frame.unitGuidLow == nil
+
+    applyStyle(frame, pingType)
+    frame.bg:ClearAllPoints()
+    if frame.isWorldPoint then
+        -- Retail ground pins grow a stem from the picked world point.
+        frame.bg:SetPoint("TOP", frame, "TOP", 0, -STEM_BELOW)
+        frame.pin:SetSize(frame.pin:GetWidth(), 1)
+        frame.flipbook:Hide()
+    else
+        -- Retail unit pins are compact bubbles attached above the model; they
+        -- do not carry the ground stem that made our old unit marker look displaced.
+        frame.bg:SetPoint("BOTTOM", frame, "BOTTOM", 0, 40)
+        frame.pin:Hide()
+        frame.flipbook:Show()
+    end
+    frame.stroke:Hide()
+    frame.riseComplete = false
+    frame.settleTime   = nil
+    frame.posX, frame.posY, frame.posZ = x, y, z
+    frame.lastRawX, frame.lastRawY = nil, nil
+    frame.isClamped = false
 
     local now = GetTime()
     frame.spawnedAt      = now
@@ -289,57 +431,73 @@ function addon:ApplyPing(sender, pingType, x, y, z, guidLow, guidHigh, unitName)
 end
 
 function addon:SendPing(pingType, x, y, z, guidLow, guidHigh, unitName)
-    if GetCVar("wxlRadialPingEnabled") ~= "1" then return end
     local now = GetTime()
     if now - lastSendTime < self.SEND_RATE_LIMIT_SECONDS then return end
     lastSendTime = now
 
     if x == nil or y == nil or z == nil then
-        x, y, z, guidLow, guidHigh = GetMouseWorldPosition()
+        x, y, z, guidLow, guidHigh = self:GetMouseWorldPosition()
     end
     if x == nil or y == nil or z == nil then return end
-
-    self:ApplyPing(UnitName("player"), pingType, x, y, z, guidLow, guidHigh, unitName)
 
     local channel = (GetNumRaidMembers() > 0 and "RAID")
         or (GetNumPartyMembers() > 0 and "PARTY")
         or nil
-    if not channel then return end
-
     local safeUnitName = unitName and unitName:gsub("[:\r\n]", " ") or ""
     if #safeUnitName > 64 then safeUnitName = safeUnitName:sub(1, 64) end
+
+    if not channel then
+        self:ApplyPing(UnitName("player"), pingType, x, y, z,
+            guidLow, guidHigh, safeUnitName ~= "" and safeUnitName or nil)
+        return
+    end
+
+    local bridge = wxlwow and wxlwow.radial_ping
     local pingCodes = { OnMyWay = 0, Attack = 1, Warning = 2, Assist = 3 }
     local pingCode = pingCodes[pingType]
-    if pingCode == nil or not CreateWXLPacket then return end
-    local packet = CreateWXLPacket(self.CMSG_OPCODE, 37 + #safeUnitName)
-    if not packet then return end
-    packet:WriteUInt8(pingCode)
-    packet:WriteDouble(x):WriteDouble(y):WriteDouble(z)
-    packet:WriteUInt32(tonumber(guidLow) or 0):WriteUInt32(tonumber(guidHigh) or 0)
-    packet:WriteString(safeUnitName):Send()
+    local sent = bridge and type(bridge.send_server) == "function" and
+        pingCode ~= nil and bridge.send_server(pingCode, x, y, z,
+            tonumber(guidLow) or 0, tonumber(guidHigh) or 0, safeUnitName)
 
-    if GetCVar("wxlRadialPingChat") == "1" then
+    -- Render the sender's marker immediately.  The server packet remains the
+    -- authority for every other party member, but it is an acknowledgement
+    -- path for the sender rather than a prerequisite for local feedback.  A
+    -- realm that accepts the CMSG without echoing it (or echoes it one frame
+    -- later) must not make the ping appear to do nothing.
+    self:ApplyPing(UnitName("player"), pingType, x, y, z,
+        guidLow, guidHigh, safeUnitName ~= "" and safeUnitName or nil)
+
+    if RadialPingDB and RadialPingDB.chatEnabled then
         if guidLow and guidHigh then
             local playerName = UnitName("player") or "Someone"
-            SendChatMessage(string.format("[Map Ping] %s says move to creature %s",
-                playerName, safeUnitName ~= "" and safeUnitName or "creature"), channel)
+            DEFAULT_CHAT_FRAME:AddMessage(string.format(
+                "|cff66ccff[Map Ping]|r %s says move to %s",
+                playerName, safeUnitName ~= "" and safeUnitName or "creature"))
         else
             local label = (self.PING_TYPES[pingType] and self.PING_TYPES[pingType].label) or pingType
-            SendChatMessage("[Map Ping] " .. label, channel)
+            DEFAULT_CHAT_FRAME:AddMessage("|cff66ccff[Map Ping]|r " .. label)
         end
     end
 end
 
-if OnWXLPacket then
-    OnWXLPacket(addon.SMSG_OPCODE, function(reader)
-        local names = { [0] = "OnMyWay", [1] = "Attack", [2] = "Warning", [3] = "Assist" }
-        local pingType = names[reader:ReadUInt8()]
-        local x, y, z = reader:ReadDouble(), reader:ReadDouble(), reader:ReadDouble()
-        local guidLow, guidHigh = reader:ReadUInt32(), reader:ReadUInt32()
-        local unitName, sender = reader:ReadString(), reader:ReadString()
+local function pullServerPings()
+    local bridge = wxlwow and wxlwow.radial_ping
+    if not bridge or type(bridge.pop_server) ~= "function" then return end
+    local pingNames = { [0] = "OnMyWay", [1] = "Attack", [2] = "Warning", [3] = "Assist" }
+    while true do
+        local pingCode, x, y, z, guidLow, guidHigh, unitName, sender = bridge.pop_server()
+        if pingCode == nil then break end
+        local pingType = pingNames[tonumber(pingCode)]
         if pingType and x and y and z then
-            addon:ApplyPing(sender ~= "" and sender or "Party member", pingType, x, y, z,
-                guidLow, guidHigh, unitName ~= "" and unitName or nil)
+            addon:ApplyPing(sender and sender ~= "" and sender or "Party member",
+                pingType, x, y, z, tonumber(guidLow), tonumber(guidHigh),
+                unitName and unitName ~= "" and unitName or nil)
         end
-    end)
+    end
+end
+
+local bridge = wxlwow and wxlwow.radial_ping
+if bridge then
+    bridge._NativeChanged = pullServerPings
+    pullServerPings()
 end

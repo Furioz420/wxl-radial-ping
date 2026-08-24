@@ -1,0 +1,17 @@
+<Bindings>
+    <Binding name="RADIALPING_OPEN" header="RADIALPING">
+        RadialPing_OnBinding()
+    </Binding>
+    <Binding name="RADIALPING_WARNING">
+        RadialPing_DirectBinding("Warning")
+    </Binding>
+    <Binding name="RADIALPING_ATTACK">
+        RadialPing_DirectBinding("Attack")
+    </Binding>
+    <Binding name="RADIALPING_ON_MY_WAY">
+        RadialPing_DirectBinding("OnMyWay")
+    </Binding>
+    <Binding name="RADIALPING_ASSIST">
+        RadialPing_DirectBinding("Assist")
+    </Binding>
+</Bindings>

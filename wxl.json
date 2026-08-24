@@ -1,0 +1,43 @@
+{
+  "manifest": 1,
+  "extension": {
+    "id": "wxl-radial-ping",
+    "version": "1.1.0",
+    "abi": "1.1",
+    "entry": "wxl-radial-ping.dll",
+    "assets": ["wxl-radial-ping.cfg"],
+    "requires": {
+      "wxl-runtime": ">=1.1.0"
+    },
+    "conflicts": [],
+    "hooks": []
+  },
+  "prerequisites": [
+    {
+      "kind": "server",
+      "title": "Compatible radial ping relay",
+      "detail": "Review the AzerothCore reference and integrate the matching opcode contract. The Hub does not modify a server.",
+      "url": "https://github.com/Furioz420/wxl-radial-ping/tree/main/server/azerothcore"
+    },
+    {
+      "kind": "client-data",
+      "title": "Radial Ping addon and interface assets",
+      "detail": "Install the reviewed client files through the client-data pipeline. They are not included in the Hub DLL package.",
+      "url": "https://github.com/Furioz420/wxl-radial-ping/tree/main/client"
+    }
+  ],
+  "deploy": {
+    "mode": "release",
+    "match": "wxl-radial-ping-v*.zip"
+  },
+  "listing": {
+    "title": "Radial Ping",
+    "tagline": "Retail-style party and raid pings with native world picking and model tracking.",
+    "description": "store/description.md",
+    "gallery": [],
+    "categories": ["gameplay", "social", "interface"],
+    "accent": "#4aa0d8"
+  },
+  "license": "GPL-3.0-or-later",
+  "signature": null
+}
