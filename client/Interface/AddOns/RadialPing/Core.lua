@@ -1,7 +1,6 @@
-local addon = WXL_RadialPing
+local _, addon = ...
 
-addon.CMSG_OPCODE = 0x0520
-addon.SMSG_OPCODE = 0x0104
+addon.MESSAGE_PREFIX = "RADIALPING"
 addon.SEND_RATE_LIMIT_SECONDS = 1
 addon.PING_LIFETIME_SECONDS = 5
 addon.PING_FADE_OUT_SECONDS = 0.35
@@ -14,8 +13,10 @@ addon.FLIPBOOK_ROWS = 4
 addon.FLIPBOOK_FRAMES = 21
 addon.FLIPBOOK_DURATION = 0.7
 
-addon.WHEEL_ICON_DISTANCE = 112
-addon.WHEEL_DEADZONE_RADIUS = 40
+-- Retail RadialWheelFrameMixin uses 500 squared pixels (about 22.36 px)
+-- and places full-size wedge buttons 80 px from the center.
+addon.WHEEL_ICON_DISTANCE = 80
+addon.WHEEL_DEADZONE_RADIUS = math.sqrt(500)
 addon.WHEEL_SCREEN_MARGIN = 20
 addon.WHEEL_SECTION_RADIANS = math.pi / 2
 addon.WHEEL_FRAME_OVERLAY_ALPHA = 0.55
@@ -27,8 +28,9 @@ local SOUNDS_DIR = "Interface\\WarcraftXL\\RadialPing\\Sounds\\"
 addon.PING_TYPES = {
     OnMyWay = {
         label        = "On My Way",
-        markerBg     = "Ping_UnitMarker_BG_OnMyWay",
-        markerPin    = "Ping_GroundMarker_Pin_OnMyWay",
+        unitBg       = "Ping_UnitMarker_BG_OnMyWay",
+        groundBg     = "Ping_GroundMarker_BG_OnMyWay",
+        groundPin    = "Ping_GroundMarker_Pin_OnMyWay",
         iconNormal   = "Ping_Wheel_Icon_OnMyWay",
         iconGlow     = "Ping_Wheel_Icon_OnMyWay_Glow",
         flipbook     = "Ping_Marker_FlipBook_OnMyWay",
@@ -38,8 +40,9 @@ addon.PING_TYPES = {
     },
     Attack = {
         label        = "Attack",
-        markerBg     = "Ping_UnitMarker_BG_Attack",
-        markerPin    = "Ping_GroundMarker_Pin_Attack",
+        unitBg       = "Ping_UnitMarker_BG_Attack",
+        groundBg     = "Ping_GroundMarker_BG_Attack",
+        groundPin    = "Ping_GroundMarker_Pin_Attack",
         iconNormal   = "Ping_Wheel_Icon_Attack",
         iconGlow     = "Ping_Wheel_Icon_Attack_Glow",
         flipbook     = "Ping_Marker_FlipBook_Attack",
@@ -49,8 +52,9 @@ addon.PING_TYPES = {
     },
     Warning = {
         label        = "Warning",
-        markerBg     = "Ping_UnitMarker_BG_Warning",
-        markerPin    = "Ping_GroundMarker_Pin_Warning",
+        unitBg       = "Ping_UnitMarker_BG_Warning",
+        groundBg     = "Ping_GroundMarker_BG_Warning",
+        groundPin    = "Ping_GroundMarker_Pin_Warning",
         iconNormal   = "Ping_Wheel_Icon_Warning",
         iconGlow     = "Ping_Wheel_Icon_Warning_Glow",
         flipbook     = "Ping_Marker_FlipBook_Warning",
@@ -60,8 +64,9 @@ addon.PING_TYPES = {
     },
     Assist = {
         label        = "Assist",
-        markerBg     = "Ping_UnitMarker_BG_Assist",
-        markerPin    = "Ping_GroundMarker_Pin_Assist",
+        unitBg       = "Ping_UnitMarker_BG_Assist",
+        groundBg     = "Ping_GroundMarker_BG_Assist",
+        groundPin    = "Ping_GroundMarker_Pin_Assist",
         iconNormal   = "Ping_Wheel_Icon_Assist",
         iconGlow     = "Ping_Wheel_Icon_Assist_Glow",
         flipbook     = "Ping_Marker_FlipBook_Assist",
@@ -165,7 +170,7 @@ function addon:GetCursorUIPosition()
 end
 
 function addon:PlayPingSound(pingType)
-    if GetCVar("wxlRadialPingSounds") ~= "1" then return end
+    if not (RadialPingDB and RadialPingDB.soundsEnabled) then return end
     local cfg = self.PING_TYPES[pingType]
     if cfg and cfg.sound then
         PlaySoundFile(cfg.sound)

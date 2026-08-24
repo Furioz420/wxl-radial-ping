@@ -1,21 +1,45 @@
-# WXL Radial Ping
+# wxl-radial-ping
 
-MASSIVE THANKS TO ITHORGRIM FOR THE CLIENT RELATED FUNCTIONS IN WXL.
+Retail-style party and raid pings for WarcraftXL ABI 1.1.
 
-MASSIVE THANKS TO DUSKHAVEN AND THE AFFILIATED DEVS LIKE TESTER FOR THE BASE ADDON FOR RADIAL PING.
+The native extension provides cursor-to-world picking, interpolated model-position tracking,
+world-to-UI projection, and the ping-specific `C_Ping` bridge. The addon owns the wheel and
+presentation; the server validates and relays pings to eligible group members on the same map.
 
-I just did some refining and adjustments to it and reworked it to work with wxl & ac.
+## Protocol
 
-Native WarcraftXL port of the former `RadialPing` addon.
+- `0x0521`: client radial-ping request;
+- `0x0522`: server radial-ping relay.
 
-- Client settings are archived custom CVars and appear under Interface > WXL > Radial Ping.
-- The default hotkey is `G`; it can be changed in that panel.
-- CMSG `0x0520` sends pings and SMSG `0x0104` relays them.
-- The native opcode integration is under `scripts/wxl-opcodes/server/azerothcore`.
-- The server validates and rate-limits each ping, then relays it only to online members of the
-  sender's party/raid on the same map.
-- Client files required by an MPQ/open patch are under `assets/` with their exact virtual paths.
+The current AzerothCore reference is in `server/azerothcore/wxl_radial_ping.cpp`. It rate-limits
+requests, validates positions and unit GUIDs, and relays accepted pings only to online members of
+the sender's group on the same map.
 
-Install `wxl_radial_ping.cpp`, and install the WXL opcode
-registry/integration files. Register the feature loader:
-`AddSC_wxl_radial_ping()`
+## Client data
+
+The addon is under `client/Interface/AddOns/RadialPing`. Interface textures remain under `assets/`
+with their client virtual paths. These files are reviewed and deployed through the client-data
+pipeline; they are not part of the Hub extension ZIP.
+
+The Hub release contains only:
+
+- `wxl-radial-ping.dll`;
+- `wxl-radial-ping.cfg`.
+
+## Requirements
+
+- WarcraftXL Core ABI 1.1 with FrameScript and network services;
+- `wxl-runtime` 1.1.0 or newer;
+- the matching server and client-data prerequisites above.
+
+Set `WXL_RADIAL_PING=0` in `wxl-radial-ping.cfg` to disable the native extension.
+
+## Attribution
+
+The client engine bindings and WarcraftXL integration build on work by the WarcraftXL contributors.
+The base Radial Ping addon work is credited to Duskhaven and its contributors, including Tester.
+This repository contains the WarcraftXL/AzerothCore adaptation.
+
+## License
+
+GPL-3.0-or-later. See `LICENSE`.

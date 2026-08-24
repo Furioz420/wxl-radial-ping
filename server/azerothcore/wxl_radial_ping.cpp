@@ -2,9 +2,11 @@
 
 #include "Group.h"
 #include "GroupReference.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "Timer.h"
+#include "Unit.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -16,8 +18,8 @@
 
 namespace
 {
-    constexpr uint16 WXL_CMSG_RADIAL_PING = 0x0520;
-    constexpr uint16 WXL_SMSG_RADIAL_PING = 0x0104;
+    constexpr uint16 WXL_CMSG_RADIAL_PING = 0x0521;
+    constexpr uint16 WXL_SMSG_RADIAL_PING = 0x0522;
     constexpr std::size_t WXL_FIXED_REQUEST_SIZE = 37;
     constexpr std::size_t WXL_MAX_UNIT_NAME = 64;
     constexpr uint32 WXL_RATE_LIMIT_MS = 1000;
@@ -78,6 +80,33 @@ namespace
             if (static_cast<unsigned char>(character) < 0x20 || character == ':')
                 character = ' ';
 
+        // Cursor/terrain coordinates originate at the client because the server has no camera.
+        // Unit pings are different: resolve their GUID against the sender's current map and replace
+        // the guessed hit point with the authoritative object origin. Clients retain the GUID and
+        // follow the live unit locally between packets.
+        uint64 const rawGuid = uint64(guidLow) | (uint64(guidHigh) << 32);
+        if (rawGuid)
+        {
+            ObjectGuid const guid(rawGuid);
+            Unit* unit = guid.IsUnit() ? ObjectAccessor::GetUnit(*sender, guid) : nullptr;
+            if (unit && unit->IsInWorld() && unit->GetMapId() == sender->GetMapId())
+            {
+                x = unit->GetPositionX();
+                y = unit->GetPositionY();
+                z = unit->GetPositionZ();
+                unitName = unit->GetName();
+                if (unitName.size() > WXL_MAX_UNIT_NAME)
+                    unitName.resize(WXL_MAX_UNIT_NAME);
+            }
+            else
+            {
+                // Never let a forged/stale GUID turn a fixed ground ping into a client attachment.
+                guidLow = 0;
+                guidHigh = 0;
+                unitName.clear();
+            }
+        }
+
         Group* group = sender->GetGroup();
         if (!group)
             return;
@@ -91,7 +120,7 @@ namespace
         for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
         {
             Player* member = itr->GetSource();
-            if (!member || member == sender || !member->IsInWorld() ||
+            if (!member || !member->IsInWorld() ||
                 member->GetMapId() != sender->GetMapId() || !member->GetSession())
                 continue;
             member->GetSession()->SendPacket(&response);
