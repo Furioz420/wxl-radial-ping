@@ -38,8 +38,14 @@ Set `WXL_RADIAL_PING=0` in `wxl-radial-ping.cfg` to disable the native extension
 
 The client engine bindings and WarcraftXL integration build on work by the WarcraftXL contributors.
 The base Radial Ping addon work is credited to Duskhaven and its contributors, including Tester.
-This repository contains the WarcraftXL/AzerothCore adaptation.
+This repository contains the WarcraftXL/AzerothCore adaptation. Furioz is credited for the local v1.1 integration commits; preserve original addon and asset notices.
 
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.
+
+## Integration and release checks
+
+Build the Win32 DLL against the matching core and Runtime 1.1 APIs. The repository release workflow packages the DLL and config only; server relay code and interface art/Lua are separate client/server deployments. The integrated Eunoia client has a built-in `FrameXML/FrameNew/WarcraftXL/RadialPing` path, while this repository still documents its addon payload. Select one UI loading route and retire the duplicate addon before a coordinated release.
+
+With the matching server installed, send a party ping and verify the wheel, world projection, relay, and rate-limit behavior. Test a different map and an ineligible recipient as negative cases; inspect client and server logs. Keep prior DLL/config, server integration, and client assets for rollback. `main` auto-publishes against moving upstream `v1.1`, so pin and test that core before merging release changes.
