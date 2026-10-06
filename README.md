@@ -1,5 +1,7 @@
 # wxl-radial-ping
 
+[Build compatibility and release gate](BUILDING.md)
+
 Retail-style party and raid pings for WarcraftXL ABI 1.1.
 
 The native extension provides cursor-to-world picking, interpolated model-position tracking,
@@ -48,4 +50,4 @@ GPL-3.0-or-later. See `LICENSE`.
 
 Build the Win32 DLL against the matching core and Runtime 1.1 APIs. The repository release workflow packages the DLL and config only; server relay code and interface art/Lua are separate client/server deployments. The integrated Eunoia client has a built-in `FrameXML/FrameNew/WarcraftXL/RadialPing` path, while this repository still documents its addon payload. Select one UI loading route and retire the duplicate addon before a coordinated release.
 
-With the matching server installed, send a party ping and verify the wheel, world projection, relay, and rate-limit behavior. Test a different map and an ineligible recipient as negative cases; inspect client and server logs. Keep prior DLL/config, server integration, and client assets for rollback. `main` auto-publishes against moving upstream `v1.1`, so pin and test that core before merging release changes.
+With the matching server installed, send a party ping and verify the wheel, world projection, relay, and rate-limit behavior. Test a different map and an ineligible recipient as negative cases; inspect client and server logs. Keep prior DLL/config, server integration, and client assets for rollback. The build pins the core revision in [BUILDING.md](BUILDING.md); publish a release tag only after the client/server route passes.
